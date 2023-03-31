@@ -2,6 +2,7 @@ mod lib_v0;
 mod lib_v1;
 mod lib_v2;
 mod lib_v3;
+mod lib_v4;
 
 use pyo3::prelude::*;
 
@@ -92,6 +93,10 @@ pub fn poly_match_rs(py: Python, m: &PyModule) -> PyResult<()> {
     let v3 = PyModule::new(py, "v3")?;
     lib_v3::poly_match_rs(py, v3)?;
     m.add_submodule(v3)?;
+
+    let v4 = PyModule::new(py, "v4")?;
+    lib_v4::poly_match_rs(py, v4)?;
+    m.add_submodule(v4)?;
 
     Ok(())
 }

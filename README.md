@@ -11,9 +11,12 @@ Here's a table summarizing the perf gains:
 | v2 - Naive line-to-line translation of `find_close_polygons` | 23.44                        | 12.50x     |
 | v3 - `Polygon` implementation in Rust                        | 6.29                         | 46.53x     |
 | v4 - Optimized allocations                                   | 2.90                         | 101.16x    |
+| v5 - Move outer loop to Rust (*)                             | 0.81                         | 362.23x    |
 
 There's also a "v1.5" version which is 6x faster, and uses "vectorizing" (doing more of the work directly in numpy).
-This version is much harder to optimize further.
+This version is much harder to optimize further (using Rust & technics shown in the post).
+
+(*) v5 was added after the post was published, showing how to reduce Python to Rust overhead even more.
 
 ## Setup
 
@@ -53,7 +56,7 @@ We could build a Rust bench using [criterion](https://github.com/bheisler/criter
 which would require us to "split" the Python & pure-Rust parts (Maybe using `AsRef<Polygon>`).
 
 We could also try to convert the list of Polygons only once to Rust at the start of the run.
-According to the profiler outputs, can we expect this to make a big difference?
+According to the profiler outputs, can we expect this to make a big difference? (See `v5`)
 
 ## License
 
