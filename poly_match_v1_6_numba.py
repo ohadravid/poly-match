@@ -30,11 +30,9 @@ def main(polygons: np.ndarray, points: np.ndarray) -> np.ndarray:
     # area of polygons
     x, y = polygons[:, 0, :].T, polygons[:, 1, :].T
     areas = 0.5*np.abs(np.sum(x * (np.roll(y, 1, axis=1) - np.roll(y, -1, axis=1)), axis=1))  # shoelace
-    areas = np.ones_like(polygon_to_points_dist) * areas.reshape(1, -1)
-    # mask those polygons whose distances are beyond max_dist
-    areas[polygon_to_points_dist >= max_dist] = np.inf
-    poly_indices_per_point = np.argmin(areas, axis=1)
+
     # returns vector of indices with best point to polygon matches
+    poly_indices_per_point = np.argmin(np.where(polygon_to_points_dist < max_dist, areas, np.inf), axis=1)
     return poly_indices_per_point  # size of #points
 
 @njit
