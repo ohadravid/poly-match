@@ -46,7 +46,12 @@ def cumsum0(values, axis=0):
 
 def gather_sum(values, lengths, axis=0):
     # Sum over consecutive value ranges of given length
-    return np.diff(cumsum0(values, axis)[cumsum0(lengths, axis)], axis=axis)
+    if axis == 0:
+        return np.diff(cumsum0(values, axis)[cumsum0(lengths)], axis=axis)
+    elif axis == 1:
+        #shape = [1] * len(values.shape)
+        #shape[axis] = -1
+        return np.diff(cumsum0(values, axis)[:, cumsum0(lengths)], axis=axis)
 
 def roll1(values, lengths):
     # Roll one value back to front for given value ranges
@@ -64,13 +69,13 @@ def polygon_areas(polygons, num_vertices):
 
 def smallest_polygon_in_range(polygons, num_vertices, points, max_dist):
     # For each point, find the polygon with smallest area within max_dist.
-    # If no polygon is found, no point is returned.
-    centers = gather_sum(polygons, num_vertices, axis=0) / num_vertices[:, None]
+    # If no polygon is found for a point, the point is not returned.
     areas = polygon_areas(polygons, num_vertices)
 
-    areas2d = np.tile(areas, (len(points), 1))
+    vertex_in_range = scipy.spatial.distance.cdist(points, polygons) <= max_dist
+    out_of_range = gather_sum(vertex_in_range, num_vertices, axis=1) == 0
 
-    out_of_range = scipy.spatial.distance.cdist(points, centers) > max_dist
+    areas2d = np.tile(areas, (len(points), 1))
     areas2d[out_of_range] = np.inf
 
     polygon_indices = np.argmin(areas2d, axis=1)
