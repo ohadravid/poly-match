@@ -1,0 +1,415 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="426" onload="init(evt)" viewBox="0 0 1200 426" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:"Verdana"; font-size:12px; fill:rgb(0,0,0); }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = true;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            var el = frames.children;
+            for(var i = 0; i < el.length; i++) {
+                update_text(el[i]);
+            }
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+            if (!isEdge) {
+                svg.removeAttribute("viewBox");
+            }
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (/^ *\$/.test(txt) || t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                update_text(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                update_text(e);
+            }
+        }
+    }
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+        update_text(el[i]);
+    }
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="426" fill="url(#background)"/><text id="title" x="50.0000%" y="24.00">py-spy record --native -o profile.svg -- python measure.py</text><text id="details" x="10" y="40.00"> </text><text id="unzoom" class="hide" x="10" y="24.00">Reset Zoom</text><text id="search" x="1190" y="24.00">Search</text><text id="matched" x="1190" y="415.00"> </text><svg id="frames" x="10" width="1180" total_samples="7689"><g><title>array_dealloc (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (355 samples, 4.62%)</title><rect x="0.1561%" y="100" width="4.6170%" height="15" fill="rgb(227,0,7)" fg:x="12" fg:w="355"/><text x="0.4061%" y="110.50">array..</text></g><g><title>array_dealloc (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (352 samples, 4.58%)</title><rect x="0.1951%" y="116" width="4.5780%" height="15" fill="rgb(217,0,24)" fg:x="15" fg:w="352"/><text x="0.4451%" y="126.50">array..</text></g><g><title>PyDataMem_UserFREE (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (351 samples, 4.56%)</title><rect x="0.2081%" y="132" width="4.5650%" height="15" fill="rgb(221,193,54)" fg:x="16" fg:w="351"/><text x="0.4581%" y="142.50">PyDat..</text></g><g><title>free (libc.so.6) (351 samples, 4.56%)</title><rect x="0.2081%" y="148" width="4.5650%" height="15" fill="rgb(248,212,6)" fg:x="16" fg:w="351"/><text x="0.4581%" y="158.50">free ..</text></g><g><title>0x7f0dd3e8df49 (libc.so.6) (351 samples, 4.56%)</title><rect x="0.2081%" y="164" width="4.5650%" height="15" fill="rgb(208,68,35)" fg:x="16" fg:w="351"/><text x="0.4581%" y="174.50">0x7f0..</text></g><g><title>0x7f0dd3e8d6e4 (libc.so.6) (349 samples, 4.54%)</title><rect x="0.2341%" y="180" width="4.5390%" height="15" fill="rgb(232,128,0)" fg:x="18" fg:w="349"/><text x="0.4841%" y="190.50">0x7f0..</text></g><g><title>__default_morecore (libc.so.6) (349 samples, 4.54%)</title><rect x="0.2341%" y="196" width="4.5390%" height="15" fill="rgb(207,160,47)" fg:x="18" fg:w="349"/><text x="0.4841%" y="206.50">__def..</text></g><g><title>sbrk (libc.so.6) (349 samples, 4.54%)</title><rect x="0.2341%" y="212" width="4.5390%" height="15" fill="rgb(228,23,34)" fg:x="18" fg:w="349"/><text x="0.4841%" y="222.50">sbrk ..</text></g><g><title>brk (libc.so.6) (349 samples, 4.54%)</title><rect x="0.2341%" y="228" width="4.5390%" height="15" fill="rgb(218,30,26)" fg:x="18" fg:w="349"/><text x="0.4841%" y="238.50">brk (..</text></g><g><title>&lt;listcomp&gt; (poly_match_v1_6_fully_vectorized.py:78) (119 samples, 1.55%)</title><rect x="4.8121%" y="116" width="1.5477%" height="15" fill="rgb(220,122,19)" fg:x="370" fg:w="119"/><text x="5.0621%" y="126.50"></text></g><g><title>PyArray_CanCastTypeTo (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (9 samples, 0.12%)</title><rect x="6.7499%" y="212" width="0.1171%" height="15" fill="rgb(250,228,42)" fg:x="519" fg:w="9"/><text x="6.9999%" y="222.50"></text></g><g><title>PyArray_GetCastingImpl (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (8 samples, 0.10%)</title><rect x="7.6863%" y="260" width="0.1040%" height="15" fill="rgb(240,193,28)" fg:x="591" fg:w="8"/><text x="7.9363%" y="270.50"></text></g><g><title>PyArray_GetDTypeTransferFunction (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (27 samples, 0.35%)</title><rect x="7.5823%" y="228" width="0.3512%" height="15" fill="rgb(216,20,37)" fg:x="583" fg:w="27"/><text x="7.8323%" y="238.50"></text></g><g><title>define_cast_for_descrs (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (27 samples, 0.35%)</title><rect x="7.5823%" y="244" width="0.3512%" height="15" fill="rgb(206,188,39)" fg:x="583" fg:w="27"/><text x="7.8323%" y="254.50"></text></g><g><title>pthread_mutex_lock (libc.so.6) (27 samples, 0.35%)</title><rect x="8.1935%" y="228" width="0.3512%" height="15" fill="rgb(217,207,13)" fg:x="630" fg:w="27"/><text x="8.4435%" y="238.50"></text></g><g><title>pthread_mutex_unlock (libc.so.6) (35 samples, 0.46%)</title><rect x="8.5447%" y="228" width="0.4552%" height="15" fill="rgb(231,73,38)" fg:x="657" fg:w="35"/><text x="8.7947%" y="238.50"></text></g><g><title>PyArray_AssignArray (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (188 samples, 2.45%)</title><rect x="6.6068%" y="196" width="2.4451%" height="15" fill="rgb(225,20,46)" fg:x="508" fg:w="188"/><text x="6.8568%" y="206.50">Py..</text></g><g><title>raw_array_assign_array (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (160 samples, 2.08%)</title><rect x="6.9710%" y="212" width="2.0809%" height="15" fill="rgb(210,31,41)" fg:x="536" fg:w="160"/><text x="7.2210%" y="222.50">r..</text></g><g><title>PyArray_AssignFromCache_Recursive (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (209 samples, 2.72%)</title><rect x="6.4638%" y="180" width="2.7182%" height="15" fill="rgb(221,200,47)" fg:x="497" fg:w="209"/><text x="6.7138%" y="190.50">Py..</text></g><g><title>npy_unlink_coercion_cache (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (10 samples, 0.13%)</title><rect x="9.0519%" y="196" width="0.1301%" height="15" fill="rgb(226,26,5)" fg:x="696" fg:w="10"/><text x="9.3019%" y="206.50"></text></g><g><title>array_dealloc (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (15 samples, 0.20%)</title><rect x="9.1819%" y="180" width="0.1951%" height="15" fill="rgb(249,33,26)" fg:x="706" fg:w="15"/><text x="9.4319%" y="190.50"></text></g><g><title>PyArray_UpdateFlags (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (15 samples, 0.20%)</title><rect x="10.0273%" y="228" width="0.1951%" height="15" fill="rgb(235,183,28)" fg:x="771" fg:w="15"/><text x="10.2773%" y="238.50"></text></g><g><title>PyArray_AssignFromCache_Recursive (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (300 samples, 3.90%)</title><rect x="6.3727%" y="164" width="3.9017%" height="15" fill="rgb(221,5,38)" fg:x="490" fg:w="300"/><text x="6.6227%" y="174.50">PyAr..</text></g><g><title>array_item_asarray (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (69 samples, 0.90%)</title><rect x="9.3770%" y="180" width="0.8974%" height="15" fill="rgb(247,18,42)" fg:x="721" fg:w="69"/><text x="9.6270%" y="190.50"></text></g><g><title>get_view_from_index.constprop.0 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (67 samples, 0.87%)</title><rect x="9.4030%" y="196" width="0.8714%" height="15" fill="rgb(241,131,45)" fg:x="723" fg:w="67"/><text x="9.6530%" y="206.50"></text></g><g><title>PyArray_NewFromDescr_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (55 samples, 0.72%)</title><rect x="9.5591%" y="212" width="0.7153%" height="15" fill="rgb(249,31,29)" fg:x="735" fg:w="55"/><text x="9.8091%" y="222.50"></text></g><g><title>array_asarray (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (347 samples, 4.51%)</title><rect x="6.3597%" y="116" width="4.5129%" height="15" fill="rgb(225,111,53)" fg:x="489" fg:w="347"/><text x="6.6097%" y="126.50">array..</text></g><g><title>PyArray_CheckFromAny_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (346 samples, 4.50%)</title><rect x="6.3727%" y="132" width="4.4999%" height="15" fill="rgb(238,160,17)" fg:x="490" fg:w="346"/><text x="6.6227%" y="142.50">PyArr..</text></g><g><title>PyArray_FromAny_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (346 samples, 4.50%)</title><rect x="6.3727%" y="148" width="4.4999%" height="15" fill="rgb(214,148,48)" fg:x="490" fg:w="346"/><text x="6.6227%" y="158.50">PyArr..</text></g><g><title>PyArray_DiscoverDTypeAndShape (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (46 samples, 0.60%)</title><rect x="10.2744%" y="164" width="0.5983%" height="15" fill="rgb(232,36,49)" fg:x="790" fg:w="46"/><text x="10.5244%" y="174.50"></text></g><g><title>PyArray_DiscoverDTypeAndShape_Recursive (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (46 samples, 0.60%)</title><rect x="10.2744%" y="180" width="0.5983%" height="15" fill="rgb(209,103,24)" fg:x="790" fg:w="46"/><text x="10.5244%" y="190.50"></text></g><g><title>PyArray_DiscoverDTypeAndShape_Recursive (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (39 samples, 0.51%)</title><rect x="10.3655%" y="196" width="0.5072%" height="15" fill="rgb(229,88,8)" fg:x="797" fg:w="39"/><text x="10.6155%" y="206.50"></text></g><g><title>main (poly_match_v1_6_fully_vectorized.py:78) (472 samples, 6.14%)</title><rect x="4.7731%" y="100" width="6.1386%" height="15" fill="rgb(213,181,19)" fg:x="367" fg:w="472"/><text x="5.0231%" y="110.50">main (po..</text></g><g><title>area (poly_match_v1_6_fully_vectorized.py:23) (57 samples, 0.74%)</title><rect x="12.0432%" y="132" width="0.7413%" height="15" fill="rgb(254,191,54)" fg:x="926" fg:w="57"/><text x="12.2932%" y="142.50"></text></g><g><title>area (poly_match_v1_6_fully_vectorized.py:25) (20 samples, 0.26%)</title><rect x="12.8105%" y="132" width="0.2601%" height="15" fill="rgb(241,83,37)" fg:x="985" fg:w="20"/><text x="13.0605%" y="142.50"></text></g><g><title>&lt;listcomp&gt; (poly_match_v1_6_fully_vectorized.py:79) (164 samples, 2.13%)</title><rect x="10.9637%" y="116" width="2.1329%" height="15" fill="rgb(233,36,39)" fg:x="843" fg:w="164"/><text x="11.2137%" y="126.50">&lt;..</text></g><g><title>PyArray_AssignFromCache_Recursive (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (15 samples, 0.20%)</title><rect x="13.0966%" y="164" width="0.1951%" height="15" fill="rgb(226,3,54)" fg:x="1007" fg:w="15"/><text x="13.3466%" y="174.50"></text></g><g><title>PyArray_Pack (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (11 samples, 0.14%)</title><rect x="13.1487%" y="180" width="0.1431%" height="15" fill="rgb(245,192,40)" fg:x="1011" fg:w="11"/><text x="13.3987%" y="190.50"></text></g><g><title>PyArray_DiscoverDTypeAndShape_Recursive (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (35 samples, 0.46%)</title><rect x="13.3177%" y="196" width="0.4552%" height="15" fill="rgb(238,167,29)" fg:x="1024" fg:w="35"/><text x="13.5677%" y="206.50"></text></g><g><title>PyArray_DiscoverDTypeAndShape (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (39 samples, 0.51%)</title><rect x="13.2917%" y="164" width="0.5072%" height="15" fill="rgb(232,182,51)" fg:x="1022" fg:w="39"/><text x="13.5417%" y="174.50"></text></g><g><title>PyArray_DiscoverDTypeAndShape_Recursive (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (39 samples, 0.51%)</title><rect x="13.2917%" y="180" width="0.5072%" height="15" fill="rgb(231,60,39)" fg:x="1022" fg:w="39"/><text x="13.5417%" y="190.50"></text></g><g><title>main (poly_match_v1_6_fully_vectorized.py:79) (223 samples, 2.90%)</title><rect x="10.9117%" y="100" width="2.9002%" height="15" fill="rgb(208,69,12)" fg:x="839" fg:w="223"/><text x="11.1617%" y="110.50">ma..</text></g><g><title>array_asarray (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (55 samples, 0.72%)</title><rect x="13.0966%" y="116" width="0.7153%" height="15" fill="rgb(235,93,37)" fg:x="1007" fg:w="55"/><text x="13.3466%" y="126.50"></text></g><g><title>PyArray_CheckFromAny_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (55 samples, 0.72%)</title><rect x="13.0966%" y="132" width="0.7153%" height="15" fill="rgb(213,116,39)" fg:x="1007" fg:w="55"/><text x="13.3466%" y="142.50"></text></g><g><title>PyArray_FromAny_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (55 samples, 0.72%)</title><rect x="13.0966%" y="148" width="0.7153%" height="15" fill="rgb(222,207,29)" fg:x="1007" fg:w="55"/><text x="13.3466%" y="158.50"></text></g><g><title>NpyIter_AdvancedNew (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (16 samples, 0.21%)</title><rect x="13.9940%" y="180" width="0.2081%" height="15" fill="rgb(206,96,30)" fg:x="1076" fg:w="16"/><text x="14.2440%" y="190.50"></text></g><g><title>npyiter_new_temp_array.constprop.0 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="14.0330%" y="196" width="0.1691%" height="15" fill="rgb(218,138,4)" fg:x="1079" fg:w="13"/><text x="14.2830%" y="206.50"></text></g><g><title>PyArray_NewFromDescr (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="14.0330%" y="212" width="0.1691%" height="15" fill="rgb(250,191,14)" fg:x="1079" fg:w="13"/><text x="14.2830%" y="222.50"></text></g><g><title>PyArray_NewFromDescr_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="14.0330%" y="228" width="0.1691%" height="15" fill="rgb(239,60,40)" fg:x="1079" fg:w="13"/><text x="14.2830%" y="238.50"></text></g><g><title>PyDataMem_UserNEW (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="14.0330%" y="244" width="0.1691%" height="15" fill="rgb(206,27,48)" fg:x="1079" fg:w="13"/><text x="14.2830%" y="254.50"></text></g><g><title>default_malloc (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="14.0330%" y="260" width="0.1691%" height="15" fill="rgb(225,35,8)" fg:x="1079" fg:w="13"/><text x="14.2830%" y="270.50"></text></g><g><title>malloc (libc.so.6) (13 samples, 0.17%)</title><rect x="14.0330%" y="276" width="0.1691%" height="15" fill="rgb(250,213,24)" fg:x="1079" fg:w="13"/><text x="14.2830%" y="286.50"></text></g><g><title>0x7f0dd3e8f95d (libc.so.6) (12 samples, 0.16%)</title><rect x="14.0460%" y="292" width="0.1561%" height="15" fill="rgb(247,123,22)" fg:x="1080" fg:w="12"/><text x="14.2960%" y="302.50"></text></g><g><title>0x7f0dd3f92e3c (libc.so.6) (48 samples, 0.62%)</title><rect x="14.6963%" y="244" width="0.6243%" height="15" fill="rgb(231,138,38)" fg:x="1130" fg:w="48"/><text x="14.9463%" y="254.50"></text></g><g><title>NpyIter_ResetBasePointers (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (86 samples, 1.12%)</title><rect x="14.2411%" y="180" width="1.1185%" height="15" fill="rgb(231,145,46)" fg:x="1095" fg:w="86"/><text x="14.4911%" y="190.50"></text></g><g><title>npyiter_copy_to_buffers (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (82 samples, 1.07%)</title><rect x="14.2931%" y="196" width="1.0665%" height="15" fill="rgb(251,118,11)" fg:x="1099" fg:w="82"/><text x="14.5431%" y="206.50"></text></g><g><title>PyArray_TransferNDimToStrided (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (80 samples, 1.04%)</title><rect x="14.3192%" y="212" width="1.0404%" height="15" fill="rgb(217,147,25)" fg:x="1101" fg:w="80"/><text x="14.5692%" y="222.50"></text></g><g><title>_contig_to_contig (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (68 samples, 0.88%)</title><rect x="14.4752%" y="228" width="0.8844%" height="15" fill="rgb(247,81,37)" fg:x="1113" fg:w="68"/><text x="14.7252%" y="238.50"></text></g><g><title>generic_wrapped_legacy_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (599 samples, 7.79%)</title><rect x="15.3726%" y="180" width="7.7903%" height="15" fill="rgb(209,12,38)" fg:x="1182" fg:w="599"/><text x="15.6226%" y="190.50">generic_wra..</text></g><g><title>DOUBLE_subtract_FMA3__AVX2 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (598 samples, 7.78%)</title><rect x="15.3856%" y="196" width="7.7773%" height="15" fill="rgb(227,1,9)" fg:x="1183" fg:w="598"/><text x="15.6356%" y="206.50">DOUBLE_subt..</text></g><g><title>0x7f0dd32e5500 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (22 samples, 0.29%)</title><rect x="32.6961%" y="244" width="0.2861%" height="15" fill="rgb(248,47,43)" fg:x="2514" fg:w="22"/><text x="32.9461%" y="254.50"></text></g><g><title>0x7f0dd3f92dc0 (libc.so.6) (55 samples, 0.72%)</title><rect x="32.9822%" y="244" width="0.7153%" height="15" fill="rgb(221,10,30)" fg:x="2536" fg:w="55"/><text x="33.2322%" y="254.50"></text></g><g><title>0x7f0dd3f92e00 (libc.so.6) (60 samples, 0.78%)</title><rect x="33.6975%" y="244" width="0.7803%" height="15" fill="rgb(210,229,1)" fg:x="2591" fg:w="60"/><text x="33.9475%" y="254.50"></text></g><g><title>0x7f0dd3f92e32 (libc.so.6) (73 samples, 0.95%)</title><rect x="34.4778%" y="244" width="0.9494%" height="15" fill="rgb(222,148,37)" fg:x="2651" fg:w="73"/><text x="34.7278%" y="254.50"></text></g><g><title>0x7f0dd3f92e36 (libc.so.6) (66 samples, 0.86%)</title><rect x="35.4272%" y="244" width="0.8584%" height="15" fill="rgb(234,67,33)" fg:x="2724" fg:w="66"/><text x="35.6772%" y="254.50"></text></g><g><title>0x7f0dd3f92e3c (libc.so.6) (24 samples, 0.31%)</title><rect x="36.2856%" y="244" width="0.3121%" height="15" fill="rgb(247,98,35)" fg:x="2790" fg:w="24"/><text x="36.5356%" y="254.50"></text></g><g><title>0x7f0dd3f92e40 (libc.so.6) (98 samples, 1.27%)</title><rect x="36.5977%" y="244" width="1.2745%" height="15" fill="rgb(247,138,52)" fg:x="2814" fg:w="98"/><text x="36.8477%" y="254.50"></text></g><g><title>execute_ufunc_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,945 samples, 25.30%)</title><rect x="13.9550%" y="164" width="25.2959%" height="15" fill="rgb(213,79,30)" fg:x="1073" fg:w="1945"/><text x="14.2050%" y="174.50">execute_ufunc_loop (numpy/core/_multiarr..</text></g><g><title>npyiter_buffered_iternext (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,234 samples, 16.05%)</title><rect x="23.2020%" y="180" width="16.0489%" height="15" fill="rgb(246,177,23)" fg:x="1784" fg:w="1234"/><text x="23.4520%" y="190.50">npyiter_buffered_iternext..</text></g><g><title>npyiter_copy_to_buffers (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,233 samples, 16.04%)</title><rect x="23.2150%" y="196" width="16.0359%" height="15" fill="rgb(230,62,27)" fg:x="1785" fg:w="1233"/><text x="23.4650%" y="206.50">npyiter_copy_to_buffers (..</text></g><g><title>PyArray_TransferNDimToStrided (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,232 samples, 16.02%)</title><rect x="23.2280%" y="212" width="16.0229%" height="15" fill="rgb(216,154,8)" fg:x="1786" fg:w="1232"/><text x="23.4780%" y="222.50">PyArray_TransferNDimToStr..</text></g><g><title>_contig_to_contig (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (781 samples, 10.16%)</title><rect x="29.0935%" y="228" width="10.1574%" height="15" fill="rgb(244,35,45)" fg:x="2237" fg:w="781"/><text x="29.3435%" y="238.50">_contig_to_cont..</text></g><g><title>0x7f0dd3f92e46 (libc.so.6) (106 samples, 1.38%)</title><rect x="37.8723%" y="244" width="1.3786%" height="15" fill="rgb(251,115,12)" fg:x="2912" fg:w="106"/><text x="38.1223%" y="254.50"></text></g><g><title>array_subtract (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,952 samples, 25.39%)</title><rect x="13.8900%" y="132" width="25.3869%" height="15" fill="rgb(240,54,50)" fg:x="1068" fg:w="1952"/><text x="14.1400%" y="142.50">array_subtract (numpy/core/_multiarray_um..</text></g><g><title>ufunc_generic_fastcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,950 samples, 25.36%)</title><rect x="13.9160%" y="148" width="25.3609%" height="15" fill="rgb(233,84,52)" fg:x="1070" fg:w="1950"/><text x="14.1660%" y="158.50">ufunc_generic_fastcall (numpy/core/_mult..</text></g><g><title>0x7f0dd3e8e2cb (libc.so.6) (9 samples, 0.12%)</title><rect x="39.7061%" y="308" width="0.1171%" height="15" fill="rgb(207,117,47)" fg:x="3053" fg:w="9"/><text x="39.9561%" y="318.50"></text></g><g><title>PyArray_NewFromDescr (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="39.7061%" y="212" width="0.1691%" height="15" fill="rgb(249,43,39)" fg:x="3053" fg:w="13"/><text x="39.9561%" y="222.50"></text></g><g><title>PyArray_NewFromDescr_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="39.7061%" y="228" width="0.1691%" height="15" fill="rgb(209,38,44)" fg:x="3053" fg:w="13"/><text x="39.9561%" y="238.50"></text></g><g><title>PyDataMem_UserNEW (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="39.7061%" y="244" width="0.1691%" height="15" fill="rgb(236,212,23)" fg:x="3053" fg:w="13"/><text x="39.9561%" y="254.50"></text></g><g><title>default_malloc (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (13 samples, 0.17%)</title><rect x="39.7061%" y="260" width="0.1691%" height="15" fill="rgb(242,79,21)" fg:x="3053" fg:w="13"/><text x="39.9561%" y="270.50"></text></g><g><title>malloc (libc.so.6) (13 samples, 0.17%)</title><rect x="39.7061%" y="276" width="0.1691%" height="15" fill="rgb(211,96,35)" fg:x="3053" fg:w="13"/><text x="39.9561%" y="286.50"></text></g><g><title>0x7f0dd3e8f95d (libc.so.6) (13 samples, 0.17%)</title><rect x="39.7061%" y="292" width="0.1691%" height="15" fill="rgb(253,215,40)" fg:x="3053" fg:w="13"/><text x="39.9561%" y="302.50"></text></g><g><title>generic_wrapped_legacy_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (595 samples, 7.74%)</title><rect x="39.8751%" y="212" width="7.7383%" height="15" fill="rgb(211,81,21)" fg:x="3066" fg:w="595"/><text x="40.1251%" y="222.50">generic_wra..</text></g><g><title>DOUBLE_multiply_FMA3__AVX2 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (595 samples, 7.74%)</title><rect x="39.8751%" y="228" width="7.7383%" height="15" fill="rgb(208,190,38)" fg:x="3066" fg:w="595"/><text x="40.1251%" y="238.50">DOUBLE_mult..</text></g><g><title>norm (numpy/linalg/linalg.py:2583) (619 samples, 8.05%)</title><rect x="39.5760%" y="148" width="8.0505%" height="15" fill="rgb(235,213,38)" fg:x="3043" fg:w="619"/><text x="39.8260%" y="158.50">norm (numpy..</text></g><g><title>array_multiply (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (616 samples, 8.01%)</title><rect x="39.6150%" y="164" width="8.0114%" height="15" fill="rgb(237,122,38)" fg:x="3046" fg:w="616"/><text x="39.8650%" y="174.50">array_multi..</text></g><g><title>ufunc_generic_fastcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (614 samples, 7.99%)</title><rect x="39.6410%" y="180" width="7.9854%" height="15" fill="rgb(244,218,35)" fg:x="3048" fg:w="614"/><text x="39.8910%" y="190.50">ufunc_gener..</text></g><g><title>try_trivial_single_output_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (610 samples, 7.93%)</title><rect x="39.6931%" y="196" width="7.9334%" height="15" fill="rgb(240,68,47)" fg:x="3052" fg:w="610"/><text x="39.9431%" y="206.50">try_trivial..</text></g><g><title>PyDataMem_UserNEW (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (8 samples, 0.10%)</title><rect x="47.8476%" y="260" width="0.1040%" height="15" fill="rgb(210,16,53)" fg:x="3679" fg:w="8"/><text x="48.0976%" y="270.50"></text></g><g><title>default_malloc (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (8 samples, 0.10%)</title><rect x="47.8476%" y="276" width="0.1040%" height="15" fill="rgb(235,124,12)" fg:x="3679" fg:w="8"/><text x="48.0976%" y="286.50"></text></g><g><title>malloc (libc.so.6) (8 samples, 0.10%)</title><rect x="47.8476%" y="292" width="0.1040%" height="15" fill="rgb(224,169,11)" fg:x="3679" fg:w="8"/><text x="48.0976%" y="302.50"></text></g><g><title>0x7f0dd3e8f95d (libc.so.6) (8 samples, 0.10%)</title><rect x="47.8476%" y="308" width="0.1040%" height="15" fill="rgb(250,166,2)" fg:x="3679" fg:w="8"/><text x="48.0976%" y="318.50"></text></g><g><title>NpyIter_AdvancedNew (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (17 samples, 0.22%)</title><rect x="47.7435%" y="196" width="0.2211%" height="15" fill="rgb(242,216,29)" fg:x="3671" fg:w="17"/><text x="47.9935%" y="206.50"></text></g><g><title>npyiter_new_temp_array.constprop.0 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (11 samples, 0.14%)</title><rect x="47.8216%" y="212" width="0.1431%" height="15" fill="rgb(230,116,27)" fg:x="3677" fg:w="11"/><text x="48.0716%" y="222.50"></text></g><g><title>PyArray_NewFromDescr (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (11 samples, 0.14%)</title><rect x="47.8216%" y="228" width="0.1431%" height="15" fill="rgb(228,99,48)" fg:x="3677" fg:w="11"/><text x="48.0716%" y="238.50"></text></g><g><title>PyArray_NewFromDescr_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (10 samples, 0.13%)</title><rect x="47.8346%" y="244" width="0.1301%" height="15" fill="rgb(253,11,6)" fg:x="3678" fg:w="10"/><text x="48.0846%" y="254.50"></text></g><g><title>raw_array_assign_scalar (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (335 samples, 4.36%)</title><rect x="48.0557%" y="196" width="4.3569%" height="15" fill="rgb(247,143,39)" fg:x="3695" fg:w="335"/><text x="48.3057%" y="206.50">raw_a..</text></g><g><title>_aligned_strided_to_contig_size8_srcstride0 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (331 samples, 4.30%)</title><rect x="48.1077%" y="212" width="4.3049%" height="15" fill="rgb(236,97,10)" fg:x="3699" fg:w="331"/><text x="48.3577%" y="222.50">_alig..</text></g><g><title>generic_wrapped_legacy_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (664 samples, 8.64%)</title><rect x="60.0858%" y="212" width="8.6357%" height="15" fill="rgb(233,208,19)" fg:x="4620" fg:w="664"/><text x="60.3358%" y="222.50">generic_wrap..</text></g><g><title>DOUBLE_add_FMA3__AVX2 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (569 samples, 7.40%)</title><rect x="61.3214%" y="228" width="7.4002%" height="15" fill="rgb(216,164,2)" fg:x="4715" fg:w="569"/><text x="61.5714%" y="238.50">DOUBLE_add..</text></g><g><title>PyUFunc_ReduceWrapper (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,903 samples, 24.75%)</title><rect x="47.7175%" y="180" width="24.7496%" height="15" fill="rgb(220,129,5)" fg:x="3669" fg:w="1903"/><text x="47.9675%" y="190.50">PyUFunc_ReduceWrapper (numpy/core/_mult..</text></g><g><title>reduce_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,542 samples, 20.05%)</title><rect x="52.4125%" y="196" width="20.0546%" height="15" fill="rgb(242,17,10)" fg:x="4030" fg:w="1542"/><text x="52.6625%" y="206.50">reduce_loop (numpy/core/_multia..</text></g><g><title>npyiter_buffered_reduce_iternext_iters2 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (288 samples, 3.75%)</title><rect x="68.7216%" y="212" width="3.7456%" height="15" fill="rgb(242,107,0)" fg:x="5284" fg:w="288"/><text x="68.9716%" y="222.50">npyi..</text></g><g><title>PyUFunc_GenericReduction (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (1,909 samples, 24.83%)</title><rect x="47.6525%" y="164" width="24.8277%" height="15" fill="rgb(251,28,31)" fg:x="3664" fg:w="1909"/><text x="47.9025%" y="174.50">PyUFunc_GenericReduction (numpy/core/_mu..</text></g><g><title>PyArray_NewFromDescr (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (11 samples, 0.14%)</title><rect x="72.5712%" y="196" width="0.1431%" height="15" fill="rgb(233,223,10)" fg:x="5580" fg:w="11"/><text x="72.8212%" y="206.50"></text></g><g><title>PyArray_NewFromDescr_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (11 samples, 0.14%)</title><rect x="72.5712%" y="212" width="0.1431%" height="15" fill="rgb(215,21,27)" fg:x="5580" fg:w="11"/><text x="72.8212%" y="222.50"></text></g><g><title>PyDataMem_UserNEW (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (10 samples, 0.13%)</title><rect x="72.5842%" y="228" width="0.1301%" height="15" fill="rgb(232,23,21)" fg:x="5581" fg:w="10"/><text x="72.8342%" y="238.50"></text></g><g><title>default_malloc (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (10 samples, 0.13%)</title><rect x="72.5842%" y="244" width="0.1301%" height="15" fill="rgb(244,5,23)" fg:x="5581" fg:w="10"/><text x="72.8342%" y="254.50"></text></g><g><title>malloc (libc.so.6) (10 samples, 0.13%)</title><rect x="72.5842%" y="260" width="0.1301%" height="15" fill="rgb(226,81,46)" fg:x="5581" fg:w="10"/><text x="72.8342%" y="270.50"></text></g><g><title>0x7f0dd3e8f95d (libc.so.6) (9 samples, 0.12%)</title><rect x="72.5972%" y="276" width="0.1171%" height="15" fill="rgb(247,70,30)" fg:x="5582" fg:w="9"/><text x="72.8472%" y="286.50"></text></g><g><title>ufunc_generic_fastcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (508 samples, 6.61%)</title><rect x="72.5062%" y="164" width="6.6068%" height="15" fill="rgb(212,68,19)" fg:x="5575" fg:w="508"/><text x="72.7562%" y="174.50">ufunc_gen..</text></g><g><title>try_trivial_single_output_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (504 samples, 6.55%)</title><rect x="72.5582%" y="180" width="6.5548%" height="15" fill="rgb(240,187,13)" fg:x="5579" fg:w="504"/><text x="72.8082%" y="190.50">try_trivi..</text></g><g><title>generic_wrapped_legacy_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (492 samples, 6.40%)</title><rect x="72.7143%" y="196" width="6.3988%" height="15" fill="rgb(223,113,26)" fg:x="5591" fg:w="492"/><text x="72.9643%" y="206.50">generic_..</text></g><g><title>DOUBLE_sqrt_SSE41 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (492 samples, 6.40%)</title><rect x="72.7143%" y="212" width="6.3988%" height="15" fill="rgb(206,192,2)" fg:x="5591" fg:w="492"/><text x="72.9643%" y="222.50">DOUBLE_s..</text></g><g><title>main (poly_match_v1_6_fully_vectorized.py:80) (5,022 samples, 65.31%)</title><rect x="13.8119%" y="100" width="65.3141%" height="15" fill="rgb(241,108,4)" fg:x="1062" fg:w="5022"/><text x="14.0619%" y="110.50">main (poly_match_v1_6_fully_vectorized.py:80)</text></g><g><title>find_dist_to_points (poly_match_v1_6_fully_vectorized.py:72) (5,022 samples, 65.31%)</title><rect x="13.8119%" y="116" width="65.3141%" height="15" fill="rgb(247,173,49)" fg:x="1062" fg:w="5022"/><text x="14.0619%" y="126.50">find_dist_to_points (poly_match_v1_6_fully_vectorized.py:72)</text></g><g><title>dispatcher_vectorcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (3,064 samples, 39.85%)</title><rect x="39.2769%" y="132" width="39.8491%" height="15" fill="rgb(224,114,35)" fg:x="3020" fg:w="3064"/><text x="39.5269%" y="142.50">dispatcher_vectorcall (numpy/core/_multiarray_umath.cpython-310-x..</text></g><g><title>norm (numpy/linalg/linalg.py:2586) (2,422 samples, 31.50%)</title><rect x="47.6265%" y="148" width="31.4995%" height="15" fill="rgb(245,159,27)" fg:x="3662" fg:w="2422"/><text x="47.8765%" y="158.50">norm (numpy/linalg/linalg.py:2586)</text></g><g><title>main (poly_match_v1_6_fully_vectorized.py:82) (49 samples, 0.64%)</title><rect x="79.1260%" y="100" width="0.6373%" height="15" fill="rgb(245,172,44)" fg:x="6084" fg:w="49"/><text x="79.3760%" y="110.50"></text></g><g><title>find_close_polygons (poly_match_v1_6_fully_vectorized.py:60) (48 samples, 0.62%)</title><rect x="79.1390%" y="116" width="0.6243%" height="15" fill="rgb(236,23,11)" fg:x="6085" fg:w="48"/><text x="79.3890%" y="126.50"></text></g><g><title>array_richcompare (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (47 samples, 0.61%)</title><rect x="79.1520%" y="132" width="0.6113%" height="15" fill="rgb(205,117,38)" fg:x="6086" fg:w="47"/><text x="79.4020%" y="142.50"></text></g><g><title>ufunc_generic_fastcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (44 samples, 0.57%)</title><rect x="79.1911%" y="148" width="0.5722%" height="15" fill="rgb(237,72,25)" fg:x="6089" fg:w="44"/><text x="79.4411%" y="158.50"></text></g><g><title>try_trivial_single_output_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (36 samples, 0.47%)</title><rect x="79.2951%" y="164" width="0.4682%" height="15" fill="rgb(244,70,9)" fg:x="6097" fg:w="36"/><text x="79.5451%" y="174.50"></text></g><g><title>generic_wrapped_legacy_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (36 samples, 0.47%)</title><rect x="79.2951%" y="180" width="0.4682%" height="15" fill="rgb(217,125,39)" fg:x="6097" fg:w="36"/><text x="79.5451%" y="190.50"></text></g><g><title>DOUBLE_less_AVX2 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (36 samples, 0.47%)</title><rect x="79.2951%" y="196" width="0.4682%" height="15" fill="rgb(235,36,10)" fg:x="6097" fg:w="36"/><text x="79.5451%" y="206.50"></text></g><g><title>simd_binary_scalar2_less_f64 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (36 samples, 0.47%)</title><rect x="79.2951%" y="212" width="0.4682%" height="15" fill="rgb(251,123,47)" fg:x="6097" fg:w="36"/><text x="79.5451%" y="222.50"></text></g><g><title>array_repeat (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (84 samples, 1.09%)</title><rect x="79.8673%" y="132" width="1.0925%" height="15" fill="rgb(221,13,13)" fg:x="6141" fg:w="84"/><text x="80.1173%" y="142.50"></text></g><g><title>PyArray_Repeat (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (83 samples, 1.08%)</title><rect x="79.8803%" y="148" width="1.0795%" height="15" fill="rgb(238,131,9)" fg:x="6142" fg:w="83"/><text x="80.1303%" y="158.50"></text></g><g><title>npy_fastrepeat (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (81 samples, 1.05%)</title><rect x="79.9064%" y="164" width="1.0535%" height="15" fill="rgb(211,50,8)" fg:x="6144" fg:w="81"/><text x="80.1564%" y="174.50"></text></g><g><title>select_best_polygon_index (poly_match_v1_6_fully_vectorized.py:66) (91 samples, 1.18%)</title><rect x="79.7893%" y="116" width="1.1835%" height="15" fill="rgb(245,182,24)" fg:x="6135" fg:w="91"/><text x="80.0393%" y="126.50"></text></g><g><title>PyArray_MapIterCheckIndices.part.0 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (130 samples, 1.69%)</title><rect x="81.0118%" y="148" width="1.6907%" height="15" fill="rgb(242,14,37)" fg:x="6229" fg:w="130"/><text x="81.2618%" y="158.50"></text></g><g><title>array_assign_subscript (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (438 samples, 5.70%)</title><rect x="80.9858%" y="132" width="5.6964%" height="15" fill="rgb(246,228,12)" fg:x="6227" fg:w="438"/><text x="81.2358%" y="142.50">array_a..</text></g><g><title>mapiter_set (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (304 samples, 3.95%)</title><rect x="82.7286%" y="148" width="3.9537%" height="15" fill="rgb(213,55,15)" fg:x="6361" fg:w="304"/><text x="82.9786%" y="158.50">mapi..</text></g><g><title>count_nonzero_int (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (10 samples, 0.13%)</title><rect x="89.9467%" y="196" width="0.1301%" height="15" fill="rgb(209,9,3)" fg:x="6916" fg:w="10"/><text x="90.1967%" y="206.50"></text></g><g><title>count_nonzero_u8 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (9 samples, 0.12%)</title><rect x="89.9597%" y="212" width="0.1171%" height="15" fill="rgb(230,59,30)" fg:x="6917" fg:w="9"/><text x="90.2097%" y="222.50"></text></g><g><title>npyiter_get_multi_index_itflagsIDP (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (367 samples, 4.77%)</title><rect x="90.0767%" y="196" width="4.7731%" height="15" fill="rgb(209,121,21)" fg:x="6926" fg:w="367"/><text x="90.3267%" y="206.50">npyite..</text></g><g><title>npyiter_iternext_itflags0_dims2_iters1 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (125 samples, 1.63%)</title><rect x="94.8498%" y="196" width="1.6257%" height="15" fill="rgb(220,109,13)" fg:x="7293" fg:w="125"/><text x="95.0998%" y="206.50"></text></g><g><title>array_where (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (750 samples, 9.75%)</title><rect x="86.7343%" y="148" width="9.7542%" height="15" fill="rgb(232,18,1)" fg:x="6669" fg:w="750"/><text x="86.9843%" y="158.50">array_where (n..</text></g><g><title>PyArray_Where (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (750 samples, 9.75%)</title><rect x="86.7343%" y="164" width="9.7542%" height="15" fill="rgb(215,41,42)" fg:x="6669" fg:w="750"/><text x="86.9843%" y="174.50">PyArray_Where ..</text></g><g><title>PyArray_Nonzero (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (750 samples, 9.75%)</title><rect x="86.7343%" y="180" width="9.7542%" height="15" fill="rgb(224,123,36)" fg:x="6669" fg:w="750"/><text x="86.9843%" y="190.50">PyArray_Nonzer..</text></g><g><title>dispatcher_vectorcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (754 samples, 9.81%)</title><rect x="86.6953%" y="132" width="9.8062%" height="15" fill="rgb(240,125,3)" fg:x="6666" fg:w="754"/><text x="86.9453%" y="142.50">dispatcher_vec..</text></g><g><title>select_best_polygon_index (poly_match_v1_6_fully_vectorized.py:67) (1,218 samples, 15.84%)</title><rect x="80.9728%" y="116" width="15.8408%" height="15" fill="rgb(205,98,50)" fg:x="6226" fg:w="1218"/><text x="81.2228%" y="126.50">select_best_polygon_inde..</text></g><g><title>ufunc_generic_fastcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (24 samples, 0.31%)</title><rect x="96.5015%" y="132" width="0.3121%" height="15" fill="rgb(205,185,37)" fg:x="7420" fg:w="24"/><text x="96.7515%" y="142.50"></text></g><g><title>try_trivial_single_output_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (22 samples, 0.29%)</title><rect x="96.5275%" y="148" width="0.2861%" height="15" fill="rgb(238,207,15)" fg:x="7422" fg:w="22"/><text x="96.7775%" y="158.50"></text></g><g><title>generic_wrapped_legacy_loop (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (22 samples, 0.29%)</title><rect x="96.5275%" y="164" width="0.2861%" height="15" fill="rgb(213,199,42)" fg:x="7422" fg:w="22"/><text x="96.7775%" y="174.50"></text></g><g><title>BOOL_logical_not_AVX2 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (22 samples, 0.29%)</title><rect x="96.5275%" y="180" width="0.2861%" height="15" fill="rgb(235,201,11)" fg:x="7422" fg:w="22"/><text x="96.7775%" y="190.50"></text></g><g><title>DOUBLE_argmin_AVX2 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (36 samples, 0.47%)</title><rect x="96.9437%" y="212" width="0.4682%" height="15" fill="rgb(207,46,11)" fg:x="7454" fg:w="36"/><text x="97.1937%" y="222.50"></text></g><g><title>_aligned_strided_to_contig_size8 (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (123 samples, 1.60%)</title><rect x="97.4639%" y="260" width="1.5997%" height="15" fill="rgb(241,35,35)" fg:x="7494" fg:w="123"/><text x="97.7139%" y="270.50"></text></g><g><title>PyArray_AssignArray (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (126 samples, 1.64%)</title><rect x="97.4379%" y="228" width="1.6387%" height="15" fill="rgb(243,32,47)" fg:x="7492" fg:w="126"/><text x="97.6879%" y="238.50"></text></g><g><title>raw_array_assign_array (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (124 samples, 1.61%)</title><rect x="97.4639%" y="244" width="1.6127%" height="15" fill="rgb(247,202,23)" fg:x="7494" fg:w="124"/><text x="97.7139%" y="254.50"></text></g><g><title>PyArray_FromArray (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (127 samples, 1.65%)</title><rect x="97.4379%" y="212" width="1.6517%" height="15" fill="rgb(219,102,11)" fg:x="7492" fg:w="127"/><text x="97.6879%" y="222.50"></text></g><g><title>_PyArray_ArgMinMaxCommon (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (169 samples, 2.20%)</title><rect x="96.9437%" y="196" width="2.1979%" height="15" fill="rgb(243,110,44)" fg:x="7454" fg:w="169"/><text x="97.1937%" y="206.50">_..</text></g><g><title>main (poly_match_v1_6_fully_vectorized.py:83) (1,492 samples, 19.40%)</title><rect x="79.7633%" y="100" width="19.4043%" height="15" fill="rgb(222,74,54)" fg:x="6133" fg:w="1492"/><text x="80.0133%" y="110.50">main (poly_match_v1_6_fully_ve..</text></g><g><title>select_best_polygon_index (poly_match_v1_6_fully_vectorized.py:68) (181 samples, 2.35%)</title><rect x="96.8136%" y="116" width="2.3540%" height="15" fill="rgb(216,99,12)" fg:x="7444" fg:w="181"/><text x="97.0636%" y="126.50">s..</text></g><g><title>dispatcher_vectorcall (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (179 samples, 2.33%)</title><rect x="96.8396%" y="132" width="2.3280%" height="15" fill="rgb(226,22,26)" fg:x="7446" fg:w="179"/><text x="97.0896%" y="142.50">d..</text></g><g><title>argmin (numpy/core/fromnumeric.py:1325) (177 samples, 2.30%)</title><rect x="96.8657%" y="148" width="2.3020%" height="15" fill="rgb(217,163,10)" fg:x="7448" fg:w="177"/><text x="97.1157%" y="158.50">a..</text></g><g><title>_wrapfunc (numpy/core/fromnumeric.py:59) (172 samples, 2.24%)</title><rect x="96.9307%" y="164" width="2.2370%" height="15" fill="rgb(213,25,53)" fg:x="7453" fg:w="172"/><text x="97.1807%" y="174.50">_..</text></g><g><title>array_argmin (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (171 samples, 2.22%)</title><rect x="96.9437%" y="180" width="2.2240%" height="15" fill="rgb(252,105,26)" fg:x="7454" fg:w="171"/><text x="97.1937%" y="190.50">a..</text></g><g><title>array_item (numpy/core/_multiarray_umath.cpython-310-x86_64-linux-gnu.so) (15 samples, 0.20%)</title><rect x="99.5708%" y="132" width="0.1951%" height="15" fill="rgb(220,39,43)" fg:x="7656" fg:w="15"/><text x="99.8208%" y="142.50"></text></g><g><title>&lt;module&gt; (measure.py:20) (7,668 samples, 99.73%)</title><rect x="0.1171%" y="84" width="99.7269%" height="15" fill="rgb(229,68,48)" fg:x="9" fg:w="7668"/><text x="0.3671%" y="94.50">&lt;module&gt; (measure.py:20)</text></g><g><title>main (poly_match_v1_6_fully_vectorized.py:85) (52 samples, 0.68%)</title><rect x="99.1676%" y="100" width="0.6763%" height="15" fill="rgb(252,8,32)" fg:x="7625" fg:w="52"/><text x="99.4176%" y="110.50"></text></g><g><title>&lt;listcomp&gt; (poly_match_v1_6_fully_vectorized.py:85) (48 samples, 0.62%)</title><rect x="99.2197%" y="116" width="0.6243%" height="15" fill="rgb(223,20,43)" fg:x="7629" fg:w="48"/><text x="99.4697%" y="126.50"></text></g><g><title>&lt;module&gt; (numpy/__init__.py:140) (9 samples, 0.12%)</title><rect x="99.8439%" y="276" width="0.1171%" height="15" fill="rgb(229,81,49)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="286.50"></text></g><g><title>_handle_fromlist (&lt;frozen importlib._bootstrap&gt;:1078) (9 samples, 0.12%)</title><rect x="99.8439%" y="292" width="0.1171%" height="15" fill="rgb(236,28,36)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="302.50"></text></g><g><title>_call_with_frames_removed (&lt;frozen importlib._bootstrap&gt;:241) (9 samples, 0.12%)</title><rect x="99.8439%" y="308" width="0.1171%" height="15" fill="rgb(249,185,26)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="318.50"></text></g><g><title>_find_and_load (&lt;frozen importlib._bootstrap&gt;:1027) (9 samples, 0.12%)</title><rect x="99.8439%" y="324" width="0.1171%" height="15" fill="rgb(249,174,33)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="334.50"></text></g><g><title>_find_and_load_unlocked (&lt;frozen importlib._bootstrap&gt;:1006) (9 samples, 0.12%)</title><rect x="99.8439%" y="340" width="0.1171%" height="15" fill="rgb(233,201,37)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="350.50"></text></g><g><title>_load_unlocked (&lt;frozen importlib._bootstrap&gt;:688) (9 samples, 0.12%)</title><rect x="99.8439%" y="356" width="0.1171%" height="15" fill="rgb(221,78,26)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="366.50"></text></g><g><title>exec_module (&lt;frozen importlib._bootstrap_external&gt;:883) (9 samples, 0.12%)</title><rect x="99.8439%" y="372" width="0.1171%" height="15" fill="rgb(250,127,30)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="382.50"></text></g><g><title>_call_with_frames_removed (&lt;frozen importlib._bootstrap&gt;:241) (9 samples, 0.12%)</title><rect x="99.8439%" y="388" width="0.1171%" height="15" fill="rgb(230,49,44)" fg:x="7677" fg:w="9"/><text x="100.0939%" y="398.50"></text></g><g><title>&lt;module&gt; (measure.py:4) (11 samples, 0.14%)</title><rect x="99.8439%" y="84" width="0.1431%" height="15" fill="rgb(229,67,23)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="94.50"></text></g><g><title>_find_and_load (&lt;frozen importlib._bootstrap&gt;:1027) (11 samples, 0.14%)</title><rect x="99.8439%" y="100" width="0.1431%" height="15" fill="rgb(249,83,47)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="110.50"></text></g><g><title>_find_and_load_unlocked (&lt;frozen importlib._bootstrap&gt;:1006) (11 samples, 0.14%)</title><rect x="99.8439%" y="116" width="0.1431%" height="15" fill="rgb(215,43,3)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="126.50"></text></g><g><title>_load_unlocked (&lt;frozen importlib._bootstrap&gt;:688) (11 samples, 0.14%)</title><rect x="99.8439%" y="132" width="0.1431%" height="15" fill="rgb(238,154,13)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="142.50"></text></g><g><title>exec_module (&lt;frozen importlib._bootstrap_external&gt;:883) (11 samples, 0.14%)</title><rect x="99.8439%" y="148" width="0.1431%" height="15" fill="rgb(219,56,2)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="158.50"></text></g><g><title>_call_with_frames_removed (&lt;frozen importlib._bootstrap&gt;:241) (11 samples, 0.14%)</title><rect x="99.8439%" y="164" width="0.1431%" height="15" fill="rgb(233,0,4)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="174.50"></text></g><g><title>&lt;module&gt; (poly_match_v1_6_fully_vectorized.py:6) (11 samples, 0.14%)</title><rect x="99.8439%" y="180" width="0.1431%" height="15" fill="rgb(235,30,7)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="190.50"></text></g><g><title>_find_and_load (&lt;frozen importlib._bootstrap&gt;:1027) (11 samples, 0.14%)</title><rect x="99.8439%" y="196" width="0.1431%" height="15" fill="rgb(250,79,13)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="206.50"></text></g><g><title>_find_and_load_unlocked (&lt;frozen importlib._bootstrap&gt;:1006) (11 samples, 0.14%)</title><rect x="99.8439%" y="212" width="0.1431%" height="15" fill="rgb(211,146,34)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="222.50"></text></g><g><title>_load_unlocked (&lt;frozen importlib._bootstrap&gt;:688) (11 samples, 0.14%)</title><rect x="99.8439%" y="228" width="0.1431%" height="15" fill="rgb(228,22,38)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="238.50"></text></g><g><title>exec_module (&lt;frozen importlib._bootstrap_external&gt;:883) (11 samples, 0.14%)</title><rect x="99.8439%" y="244" width="0.1431%" height="15" fill="rgb(235,168,5)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="254.50"></text></g><g><title>_call_with_frames_removed (&lt;frozen importlib._bootstrap&gt;:241) (11 samples, 0.14%)</title><rect x="99.8439%" y="260" width="0.1431%" height="15" fill="rgb(221,155,16)" fg:x="7677" fg:w="11"/><text x="100.0939%" y="270.50"></text></g><g><title>all (7,689 samples, 100%)</title><rect x="0.0000%" y="52" width="100.0000%" height="15" fill="rgb(215,215,53)" fg:x="0" fg:w="7689"/><text x="0.2500%" y="62.50"></text></g><g><title>0x7f0dd3e14d90 (libc.so.6) (7,689 samples, 100.00%)</title><rect x="0.0000%" y="68" width="100.0000%" height="15" fill="rgb(223,4,10)" fg:x="0" fg:w="7689"/><text x="0.2500%" y="78.50">0x7f0dd3e14d90 (libc.so.6)</text></g></svg></svg>
