@@ -13,10 +13,17 @@ Here's a table summarizing the perf gains:
 | v4 - Optimized allocations                                   | 2.90                         | 101.16x    |
 | v5 - Move outer loop to Rust (*)                             | 0.81                         | 362.23x    |
 
-There's also a "v1.5" version which is 6x faster, and uses "vectorizing" (doing more of the work directly in numpy).
-This version is much harder to optimize further (using Rust & technics shown in the post).
-
 (*) v5 was added after the post was published, showing how to reduce Python to Rust overhead even more.
+
+There are also two versions which use "vectorizing" (doing more of the work directly in numpy).
+While not applicable to the original library, they also show major performance gains:
+
+| Version                                                      | Avg time per iteration (ms)  | Multiplier | 
+|--------------------------------------------------------------|------------------------------|------------|
+| v1 - Baseline implementation (Python)                        | 293.41                       | 1x         |
+| v1.5 - A bit of `numpy` vectorization                        | 41.79                        | 7.02x      |
+| v1.6 - A lot of `numpy` vectorization, by @dangrie158        | 5.18                         | 56.68x     |
+
 
 ## Setup
 
