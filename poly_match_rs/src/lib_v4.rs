@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 use ndarray::Array1;
 use ndarray_linalg::Scalar;
-use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, ToPyArray};
 
 #[pyclass(subclass)]
 struct Polygon {
@@ -44,21 +44,19 @@ impl Polygon {
 }
 
 #[pyfunction]
-fn find_close_polygons(
-    py: Python<'_>,
-    polygons: Vec<PyRef<Polygon>>,
+fn find_close_polygons<'py>(
+    polygons: Vec<Bound<'py, Polygon>>,
     point: PyReadonlyArray1<f64>,
     max_dist: f64,
-) -> PyResult<Vec<PyObject>> {
-    find_close_polygons_impl(py, &polygons, &point, max_dist)
+) -> PyResult<Vec<Bound<'py, Polygon>>> {
+    find_close_polygons_impl(&polygons, &point, max_dist)
 }
 
-fn find_close_polygons_impl(
-    py: Python<'_>,
-    polygons: &[PyRef<Polygon>],
+fn find_close_polygons_impl<'py>(
+    polygons: &[Bound<'py, Polygon>],
     point: &PyReadonlyArray1<f64>,
     max_dist: f64,
-) -> PyResult<Vec<PyObject>> {
+) -> PyResult<Vec<Bound<'py, Polygon>>> {
     let mut close_polygons = vec![];
     let point = point.as_array();
     let point = (point[0], point[1]);
@@ -66,13 +64,13 @@ fn find_close_polygons_impl(
 
     for poly in polygons {
         let norm_2 = {
-            let center = &poly.center;
+            let center = &poly.borrow().center;
 
             (center.0 - point.0).square() + (center.1 - point.1).square()
         };
 
         if norm_2 < max_dist_2 {
-            close_polygons.push(poly.into_py(py));
+            close_polygons.push(poly.clone());
         }
     }
 
@@ -80,24 +78,23 @@ fn find_close_polygons_impl(
 }
 
 #[pyfunction]
-fn find_all_close_polygons(
-    py: Python<'_>,
-    polygons: Vec<PyRef<Polygon>>,
-    points: PyReadonlyArray2<f64>,
+fn find_all_close_polygons<'py>(
+    polygons: Vec<Bound<'py, Polygon>>,
+    points: Bound<'py, PyArray2<f64>>,
     max_dist: f64,
-) -> PyResult<Vec<(PyObject, Vec<PyObject>)>> {
+) -> PyResult<Vec<(Bound<'py, PyArray1<f64>>, Vec<Bound<'py, Polygon>>)>> {
     let mut polygon_sets = vec![];
 
     for point in points.iter()? {
-        let point = point?.extract()?;
+        let point: Bound<'py, PyArray1<f64>> = point?.extract()?;
 
-        let close_polygons = find_close_polygons_impl(py, &polygons, &point, max_dist)?;
+        let close_polygons = find_close_polygons_impl(&polygons, &point.readonly(), max_dist)?;
 
         if close_polygons.len() == 0 {
             continue;
         }
 
-        polygon_sets.push((point.to_object(py), close_polygons));
+        polygon_sets.push((point, close_polygons));
     }
 
     Ok(polygon_sets)

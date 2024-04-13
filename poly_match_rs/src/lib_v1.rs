@@ -6,7 +6,7 @@ use numpy::PyReadonlyArray1;
 #[pyfunction]
 fn find_close_polygons<'py>(
     polygons: Vec<Bound<'py, PyAny>>,
-    point: PyReadonlyArray1<f64>,
+    point: PyReadonlyArray1<'py, f64>,
     max_dist: f64,
 ) -> PyResult<Vec<Bound<'py, PyAny>>> {
     let mut close_polygons = vec![];

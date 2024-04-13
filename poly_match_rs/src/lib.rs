@@ -75,7 +75,7 @@ fn find_close_polygons<'py>(
 pub fn poly_match_rs(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<Polygon>()?;
     m.add_function(wrap_pyfunction!(find_close_polygons, m)?)?;
-    
+
     // Just for easier testing of different versions.
     let v0 = PyModule::new_bound(py, "v0")?;
     lib_v0::poly_match_rs(py, &v0)?;
@@ -84,11 +84,11 @@ pub fn poly_match_rs(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     let v1 = PyModule::new_bound(py, "v1")?;
     lib_v1::poly_match_rs(py, &v1)?;
     m.add_submodule(&v1)?;
-    
+
     let v2 = PyModule::new_bound(py, "v2")?;
     lib_v2::poly_match_rs(py, &v2)?;
     m.add_submodule(&v2)?;
-    
+
     let v3 = PyModule::new_bound(py, "v3")?;
     lib_v3::poly_match_rs(py, &v3)?;
     m.add_submodule(&v3)?;
