@@ -46,7 +46,7 @@ impl Polygon {
 #[pyfunction]
 fn find_close_polygons<'py>(
     polygons: Vec<Bound<'py, Polygon>>,
-    point: PyReadonlyArray1<f64>,
+    point: PyReadonlyArray1<'py, f64>,
     max_dist: f64,
 ) -> PyResult<Vec<Bound<'py, Polygon>>> {
     let polygons_and_centers = polygons
@@ -57,12 +57,12 @@ fn find_close_polygons<'py>(
         })
         .collect::<Vec<_>>();
 
-    find_close_polygons_impl(&polygons_and_centers, &point, max_dist)
+    find_close_polygons_impl(&polygons_and_centers, point, max_dist)
 }
 
 fn find_close_polygons_impl<'py>(
     polygons_and_centers: &[(Bound<'py, Polygon>, (f64, f64))],
-    point: &PyReadonlyArray1<f64>,
+    point: PyReadonlyArray1<'py, f64>,
     max_dist: f64,
 ) -> PyResult<Vec<Bound<'py, Polygon>>> {
     let mut close_polygons = vec![];
@@ -97,10 +97,10 @@ fn find_all_close_polygons<'py>(
         .collect::<Vec<_>>();
 
     for point in points.iter()? {
-        let point: Bound<'py, PyArray1<f64>> = point?.extract()?;
+        let point: Bound<'_, PyArray1<f64>> = point?.downcast_into()?;
 
         let close_polygons =
-            find_close_polygons_impl(&polygons_and_centers, &point.readonly(), max_dist)?;
+            find_close_polygons_impl(&polygons_and_centers, point.readonly(), max_dist)?;
 
         if close_polygons.len() == 0 {
             continue;
