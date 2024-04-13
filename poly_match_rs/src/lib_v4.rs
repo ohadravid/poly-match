@@ -49,11 +49,19 @@ fn find_close_polygons<'py>(
     point: PyReadonlyArray1<f64>,
     max_dist: f64,
 ) -> PyResult<Vec<Bound<'py, Polygon>>> {
-    find_close_polygons_impl(&polygons, &point, max_dist)
+    let polygons_and_centers = polygons
+        .iter()
+        .map(|poly| {
+            let center = poly.borrow().center;
+            (poly.clone(), center)
+        })
+        .collect::<Vec<_>>();
+
+    find_close_polygons_impl(&polygons_and_centers, &point, max_dist)
 }
 
 fn find_close_polygons_impl<'py>(
-    polygons: &[Bound<'py, Polygon>],
+    polygons_and_centers: &[(Bound<'py, Polygon>, (f64, f64))],
     point: &PyReadonlyArray1<f64>,
     max_dist: f64,
 ) -> PyResult<Vec<Bound<'py, Polygon>>> {
@@ -62,12 +70,8 @@ fn find_close_polygons_impl<'py>(
     let point = (point[0], point[1]);
     let max_dist_2 = max_dist.square();
 
-    for poly in polygons {
-        let norm_2 = {
-            let center = &poly.borrow().center;
-
-            (center.0 - point.0).square() + (center.1 - point.1).square()
-        };
+    for (poly, center) in polygons_and_centers {
+        let norm_2 = (center.0 - point.0).square() + (center.1 - point.1).square();
 
         if norm_2 < max_dist_2 {
             close_polygons.push(poly.clone());
@@ -84,11 +88,19 @@ fn find_all_close_polygons<'py>(
     max_dist: f64,
 ) -> PyResult<Vec<(Bound<'py, PyArray1<f64>>, Vec<Bound<'py, Polygon>>)>> {
     let mut polygon_sets = vec![];
+    let polygons_and_centers = polygons
+        .iter()
+        .map(|poly| {
+            let center = poly.borrow().center;
+            (poly.clone(), center)
+        })
+        .collect::<Vec<_>>();
 
     for point in points.iter()? {
         let point: Bound<'py, PyArray1<f64>> = point?.extract()?;
 
-        let close_polygons = find_close_polygons_impl(&polygons, &point.readonly(), max_dist)?;
+        let close_polygons =
+            find_close_polygons_impl(&polygons_and_centers, &point.readonly(), max_dist)?;
 
         if close_polygons.len() == 0 {
             continue;
