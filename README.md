@@ -1,7 +1,7 @@
 
 The repo contains the source code for the [Making Python 100x faster with less than 100 lines of Rust](https://ohadravid.github.io/posts/2023-03-rusty-python/) blog post (there's a [copy](./rusty_python.md) in this repo as well).
 
-It's a demo library in Python that we can converts parts of to Rust, to improve its performance.
+It's a demo library in Python that we can convert parts of to Rust, to improve its performance.
 
 Here's a table summarizing the perf gains:
 

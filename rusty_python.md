@@ -63,7 +63,7 @@ def main(polygons: List[Polygon], points: np.ndarray) -> List[Tuple[Point, Polyg
 We are going to analyze this in depth in a minute.
 
 It's worth noting that converting parts of / everything to [vectorized](https://numpy.org/doc/stable/glossary.html#term-vectorization) numpy might be possible for this toy library, 
-but will be nearly impossible for the real library while making the code much less readable and modifiable, and the gains are going to be limited ([here's a partially vertorized version](https://github.com/ohadravid/poly-match/blob/main/poly_match_v1_5_vectorized.py), which is faster but far from the results we are going to achieve).
+but will be nearly impossible for the real library while making the code much less readable and modifiable, and the gains are going to be limited ([here's a partially vectorized version](https://github.com/ohadravid/poly-match/blob/main/poly_match_v1_5_vectorized.py), which is faster but far from the results we are going to achieve).
 
 Also, using any JIT-based tricks (PyPy / numba) results in very small gains (as we will measure, just to make sure).
 
