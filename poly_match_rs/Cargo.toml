@@ -14,7 +14,7 @@ lto = true
 codegen-units = 1
 
 [dependencies]
-pyo3 = { version = "0.21", features = ["extension-module", "macros", "gil-refs"] }
+pyo3 = { version = "0.21", features = ["extension-module", "macros"] }
 
 numpy = "0.21"
 ndarray = "0.15"

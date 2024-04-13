@@ -4,18 +4,17 @@ use ndarray_linalg::Norm;
 use numpy::PyReadonlyArray1;
 
 #[pyfunction]
-fn find_close_polygons(
-    py: Python<'_>,
-    polygons: Vec<PyObject>,
+fn find_close_polygons<'py>(
+    polygons: Vec<Bound<'py, PyAny>>,
     point: PyReadonlyArray1<f64>,
     max_dist: f64,
-) -> PyResult<Vec<PyObject>> {
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
     let mut close_polygons = vec![];
     let point = point.as_array();
     for poly in polygons {
         let center = poly
-            .getattr(py, "center")?
-            .extract::<PyReadonlyArray1<f64>>(py)?
+            .getattr("center")?
+            .extract::<PyReadonlyArray1<f64>>()?
             .as_array()
             .to_owned();
 
@@ -27,7 +26,7 @@ fn find_close_polygons(
     Ok(close_polygons)
 }
 
-pub fn poly_match_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+pub fn poly_match_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(find_close_polygons, m)?)?;
     Ok(())
 }

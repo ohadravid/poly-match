@@ -103,7 +103,7 @@ fn find_all_close_polygons(
     Ok(polygon_sets)
 }
 
-pub fn poly_match_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+pub fn poly_match_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<Polygon>()?;
     m.add_function(wrap_pyfunction!(find_close_polygons, m)?)?;
     m.add_function(wrap_pyfunction!(find_all_close_polygons, m)?)?;

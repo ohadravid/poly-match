@@ -43,16 +43,15 @@ impl Polygon {
 }
 
 #[pyfunction]
-fn find_close_polygons(
-    py: Python<'_>,
-    polygons: Vec<Py<Polygon>>,
-    point: PyReadonlyArray1<f64>,
+fn find_close_polygons<'py>(
+    polygons: Vec<Bound<'py, Polygon>>,
+    point: PyReadonlyArray1<'py, f64>,
     max_dist: f64,
-) -> PyResult<Vec<Py<Polygon>>> {
+) -> PyResult<Vec<Bound<'py, Polygon>>> {
     let mut close_polygons = vec![];
     let point = point.as_array();
     for poly in polygons {
-        let center = poly.borrow(py).center
+        let center = poly.borrow().center
             .to_owned();
 
         if (center - point).norm() < max_dist {
@@ -63,7 +62,7 @@ fn find_close_polygons(
     Ok(close_polygons)
 }
 
-pub fn poly_match_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+pub fn poly_match_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<Polygon>()?;
     m.add_function(wrap_pyfunction!(find_close_polygons, m)?)?;
     Ok(())

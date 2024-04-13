@@ -49,17 +49,16 @@ impl Polygon {
 }
 
 #[pyfunction]
-fn find_close_polygons(
-    py: Python<'_>,
-    polygons: Vec<Py<Polygon>>,
-    point: PyReadonlyArray1<f64>,
+fn find_close_polygons<'py>(
+    polygons: Vec<Bound<'py, Polygon>>,
+    point: PyReadonlyArray1<'py, f64>,
     max_dist: f64,
-) -> PyResult<Vec<Py<Polygon>>> {
+) -> PyResult<Vec<Bound<'py, Polygon>>> {
     let mut close_polygons = vec![];
     let point = point.as_array();
     for poly in polygons {
         let norm = {
-            let center = &poly.as_ref(py).borrow().center;
+            let center = &poly.borrow().center;
 
             ((center[0] - point[0]).square() + (center[1] - point[1]).square()).sqrt()
         };
@@ -73,30 +72,30 @@ fn find_close_polygons(
 }
 
 #[pymodule]
-pub fn poly_match_rs(py: Python, m: &PyModule) -> PyResult<()> {
+pub fn poly_match_rs(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<Polygon>()?;
     m.add_function(wrap_pyfunction!(find_close_polygons, m)?)?;
     
     // Just for easier testing of different versions.
-    let v0 = PyModule::new(py, "v0")?;
-    lib_v0::poly_match_rs(py, v0)?;
-    m.add_submodule(v0)?;
+    let v0 = PyModule::new_bound(py, "v0")?;
+    lib_v0::poly_match_rs(py, &v0)?;
+    m.add_submodule(&v0)?;
 
-    let v1 = PyModule::new(py, "v1")?;
-    lib_v1::poly_match_rs(py, v1)?;
-    m.add_submodule(v1)?;
+    let v1 = PyModule::new_bound(py, "v1")?;
+    lib_v1::poly_match_rs(py, &v1)?;
+    m.add_submodule(&v1)?;
     
-    let v2 = PyModule::new(py, "v2")?;
-    lib_v2::poly_match_rs(py, v2)?;
-    m.add_submodule(v2)?;
+    let v2 = PyModule::new_bound(py, "v2")?;
+    lib_v2::poly_match_rs(py, &v2)?;
+    m.add_submodule(&v2)?;
     
-    let v3 = PyModule::new(py, "v3")?;
-    lib_v3::poly_match_rs(py, v3)?;
-    m.add_submodule(v3)?;
+    let v3 = PyModule::new_bound(py, "v3")?;
+    lib_v3::poly_match_rs(py, &v3)?;
+    m.add_submodule(&v3)?;
 
-    let v4 = PyModule::new(py, "v4")?;
-    lib_v4::poly_match_rs(py, v4)?;
-    m.add_submodule(v4)?;
+    let v4 = PyModule::new_bound(py, "v4")?;
+    lib_v4::poly_match_rs(py, &v4)?;
+    m.add_submodule(&v4)?;
 
     Ok(())
 }
