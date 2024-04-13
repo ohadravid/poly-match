@@ -27,19 +27,19 @@ impl Polygon {
     }
 
     #[getter]
-    fn x(&self, py: Python<'_>) -> PyResult<Py<PyArray1<f64>>> {
-        Ok(self.x.to_pyarray(py).to_owned())
+    fn x<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        Ok(self.x.to_pyarray_bound(py))
     }
 
     #[getter]
-    fn y(&self, py: Python<'_>) -> PyResult<Py<PyArray1<f64>>> {
-        Ok(self.y.to_pyarray(py).to_owned())
+    fn y<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        Ok(self.y.to_pyarray_bound(py))
     }
 
     #[getter]
-    fn center(&self, py: Python<'_>) -> PyResult<Py<PyArray1<f64>>> {
+    fn center<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let center = Array1::from_vec(vec![self.center.0, self.center.1]);
-        Ok(center.to_pyarray(py).to_owned())
+        Ok(center.to_pyarray_bound(py))
     }
 }
 
