@@ -32,24 +32,31 @@ but `--native` profiling is only supported by `py-spy` on x86 Linux and Windows.
 
 (macOS / Arm Linux can still generate profiles viewing just the Python code.)
 
-For example, to setup with conda, run:
+For the complete Rust setup, you'll need Rust (use [rustup](https://rustup.rs/)).
+
+To setup with `rye`, run:
 
 ```bash
-conda install numpy pytest
+rye sync
 ```
-
-Then install `py-spy`:
-
-```bash
-pip install py-spy
-```
-
-For the complete Rust setup, you'll need Rust (use [rustup](https://rustup.rs/)) and to also `pip install maturin`.
 
 To build the native extension, run:
 
 ```bash
+source .venv/bin/activate
 (cd poly_match_rs && maturin develop --release)
+```
+
+To run the benchmarks, run:
+
+```bash
+rye run python ./measure_all.py
+```
+
+For profiling,
+
+```bash
+sudo rye run py-spy record -o profile.svg -- python measure.py
 ```
 
 ## Exploring more optimizations

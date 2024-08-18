@@ -1,0 +1,30 @@
+[project]
+name = "poly-match"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Ohad Ravid", email = "oravid@trigoretail.com" }
+]
+dependencies = [
+    "numpy>=2.0.1",
+    "pytest>=8.3.2",
+    "py-spy>=0.3.14",
+    "maturin>=1.7.0",
+    "pip>=24.2",
+]
+readme = "README.md"
+requires-python = ">= 3.8"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = []
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/poly_match"]
