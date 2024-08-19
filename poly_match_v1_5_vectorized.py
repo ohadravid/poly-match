@@ -1,4 +1,4 @@
-from functools import cache, cached_property
+from functools import cached_property
 from typing import Dict, List, Tuple
 import numpy as np
 from dataclasses import dataclass
